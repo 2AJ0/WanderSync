@@ -6,3 +6,4 @@ googlemaps
 haversine
 python-dotenv
 psycopg2-binary
+psycopg
