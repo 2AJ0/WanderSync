@@ -1,0 +1,1123 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>WanderSync</title>
+
+    <!-- Markdown Parser -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        .markdown-body table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 0.9em; }
+        .markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px; text-align: left; }
+        .markdown-body th { background: var(--bg-color); }
+        .markdown-body p { margin-top: 0; margin-bottom: 8px; }
+        .markdown-body pre, .markdown-body code { background: var(--bg-color); border-radius: 4px; padding: 2px 4px; }
+    </style>
+
+    <link rel="manifest" href="/manifest.json">
+    <!-- PDF Export Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js">
+        // Auth Logic
+        let currentUser = null;
+        
+        function toggleAuthModal() {
+            const modal = document.getElementById('authModal');
+            modal.style.display = modal.style.display === 'flex' ? 'none' : 'flex';
+        }
+        
+        async function handleAuth(action) {
+            const user = document.getElementById('usernameInput').value;
+            const pass = document.getElementById('passwordInput').value;
+            if(!user || !pass) return;
+            
+            try {
+                const res = await fetch(`/api/${action}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username: user, password: pass})
+                });
+                const data = await res.json();
+                if(res.ok) {
+                    if(action === 'login') {
+                        currentUser = data;
+                        document.getElementById('authBtn').innerText = `Hi, ${user}`;
+                        document.getElementById('saveTripBtn').style.display = 'block';
+                        toggleAuthModal();
+                    } else {
+                        document.getElementById('authError').style.display = 'block';
+                        document.getElementById('authError').style.color = 'var(--success)';
+                        document.getElementById('authError').innerText = 'Signup successful! Please login.';
+                    }
+                } else {
+                    document.getElementById('authError').style.display = 'block';
+                    document.getElementById('authError').style.color = 'var(--danger)';
+                    document.getElementById('authError').innerText = data.detail || 'Error';
+                }
+            } catch(e) {
+                console.error(e);
+            }
+        }
+
+        async function saveCurrentTrip() {
+            if(!currentUser || !tripId) return;
+            
+            const stateToSave = {
+                routeOptions: routeOptions,
+                weatherData: weatherData,
+                aiItineraryData: aiItineraryData,
+                destInput: document.getElementById('destinationInput').value
+            };
+            
+            await fetch('/api/trips/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    user_id: parseInt(currentUser.token),
+                    trip_id: tripId,
+                    destination: stateToSave.destInput,
+                    data_json: JSON.stringify(stateToSave)
+                })
+            });
+            alert("Trip saved!");
+        }
+
+        // WebSockets Logic
+        let ws;
+        const urlParams = new URLSearchParams(window.location.search);
+        let tripId = urlParams.get('trip');
+        
+        if(!tripId) {
+            tripId = Math.random().toString(36).substring(2, 10);
+            window.history.replaceState({}, '', `?trip=${tripId}`);
+        }
+        
+        // Notify others of room sharing
+        console.log("Multiplayer Room ID: ", tripId);
+        
+        function initWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws/${tripId}`);
+            
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if(data.type === 'calculate') {
+                    // Prevent infinite loops if we are the sender
+                    if(data.sender === currentUser?.username) return;
+                    
+                    // Someone else calculated a route, update our UI!
+                    routeOptions = data.state.routeOptions;
+                    weatherData = data.state.weatherData;
+                    aiItineraryData = data.state.aiItineraryData;
+                    document.getElementById('destinationInput').value = data.state.destInput;
+                    
+                    // Re-render UI
+                    renderRouteCards();
+                    if(weatherData) document.getElementById('weather-info').innerHTML = `<strong>${weatherData.temperature}°C</strong>, ${weatherData.condition}`;
+                    if(aiItineraryData) renderItinerary(aiItineraryData);
+                    
+                    // If map is active, we'd need to re-draw. For simplicity, we just trigger selectRoute on the Fastest one
+                    if(Object.keys(routeOptions).length > 0) {
+                        selectRoute(Object.keys(routeOptions)[0]);
+                    }
+                } else if(data.type === 'chat') {
+                    const messages = document.getElementById('chat-messages');
+                    messages.innerHTML += `<div style="background:var(--surface); padding:0.8rem; border-radius:8px; align-self:flex-start; max-width:85%; border:1px solid var(--border); line-height: 1.5; font-size: 0.9em;"><strong>${data.sender}:</strong> ${data.text}</div>`;
+                    messages.scrollTop = messages.scrollHeight;
+                }
+            };
+        }
+        
+        window.addEventListener('load', initWebSocket);
+
+        // Intercept Calculate Route to Broadcast State
+        const originalCalculateRoute = calculateRoute;
+        calculateRoute = async function() {
+            await originalCalculateRoute();
+            
+            // Broadcast new state to room
+            if(ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'calculate',
+                    sender: currentUser?.username || 'Guest',
+                    state: {
+                        routeOptions: routeOptions,
+                        weatherData: weatherData,
+                        aiItineraryData: aiItineraryData,
+                        destInput: document.getElementById('destinationInput').value
+                    }
+                }));
+            }
+        };
+
+
+    </script>
+    <!-- Chart.js for Budget -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js">
+        // Auth Logic
+        let currentUser = null;
+        
+        function toggleAuthModal() {
+            const modal = document.getElementById('authModal');
+            modal.style.display = modal.style.display === 'flex' ? 'none' : 'flex';
+        }
+        
+        async function handleAuth(action) {
+            const user = document.getElementById('usernameInput').value;
+            const pass = document.getElementById('passwordInput').value;
+            if(!user || !pass) return;
+            
+            try {
+                const res = await fetch(`/api/${action}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username: user, password: pass})
+                });
+                const data = await res.json();
+                if(res.ok) {
+                    if(action === 'login') {
+                        currentUser = data;
+                        document.getElementById('authBtn').innerText = `Hi, ${user}`;
+                        document.getElementById('saveTripBtn').style.display = 'block';
+                        toggleAuthModal();
+                    } else {
+                        document.getElementById('authError').style.display = 'block';
+                        document.getElementById('authError').style.color = 'var(--success)';
+                        document.getElementById('authError').innerText = 'Signup successful! Please login.';
+                    }
+                } else {
+                    document.getElementById('authError').style.display = 'block';
+                    document.getElementById('authError').style.color = 'var(--danger)';
+                    document.getElementById('authError').innerText = data.detail || 'Error';
+                }
+            } catch(e) {
+                console.error(e);
+            }
+        }
+
+        async function saveCurrentTrip() {
+            if(!currentUser || !tripId) return;
+            
+            const stateToSave = {
+                routeOptions: routeOptions,
+                weatherData: weatherData,
+                aiItineraryData: aiItineraryData,
+                destInput: document.getElementById('destinationInput').value
+            };
+            
+            await fetch('/api/trips/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    user_id: parseInt(currentUser.token),
+                    trip_id: tripId,
+                    destination: stateToSave.destInput,
+                    data_json: JSON.stringify(stateToSave)
+                })
+            });
+            alert("Trip saved!");
+        }
+
+        // WebSockets Logic
+        let ws;
+        const urlParams = new URLSearchParams(window.location.search);
+        let tripId = urlParams.get('trip');
+        
+        if(!tripId) {
+            tripId = Math.random().toString(36).substring(2, 10);
+            window.history.replaceState({}, '', `?trip=${tripId}`);
+        }
+        
+        // Notify others of room sharing
+        console.log("Multiplayer Room ID: ", tripId);
+        
+        function initWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws/${tripId}`);
+            
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if(data.type === 'calculate') {
+                    // Prevent infinite loops if we are the sender
+                    if(data.sender === currentUser?.username) return;
+                    
+                    // Someone else calculated a route, update our UI!
+                    routeOptions = data.state.routeOptions;
+                    weatherData = data.state.weatherData;
+                    aiItineraryData = data.state.aiItineraryData;
+                    document.getElementById('destinationInput').value = data.state.destInput;
+                    
+                    // Re-render UI
+                    renderRouteCards();
+                    if(weatherData) document.getElementById('weather-info').innerHTML = `<strong>${weatherData.temperature}°C</strong>, ${weatherData.condition}`;
+                    if(aiItineraryData) renderItinerary(aiItineraryData);
+                    
+                    // If map is active, we'd need to re-draw. For simplicity, we just trigger selectRoute on the Fastest one
+                    if(Object.keys(routeOptions).length > 0) {
+                        selectRoute(Object.keys(routeOptions)[0]);
+                    }
+                } else if(data.type === 'chat') {
+                    const messages = document.getElementById('chat-messages');
+                    messages.innerHTML += `<div style="background:var(--surface); padding:0.8rem; border-radius:8px; align-self:flex-start; max-width:85%; border:1px solid var(--border); line-height: 1.5; font-size: 0.9em;"><strong>${data.sender}:</strong> ${data.text}</div>`;
+                    messages.scrollTop = messages.scrollHeight;
+                }
+            };
+        }
+        
+        window.addEventListener('load', initWebSocket);
+
+        // Intercept Calculate Route to Broadcast State
+        const originalCalculateRoute = calculateRoute;
+        calculateRoute = async function() {
+            await originalCalculateRoute();
+            
+            // Broadcast new state to room
+            if(ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'calculate',
+                    sender: currentUser?.username || 'Guest',
+                    state: {
+                        routeOptions: routeOptions,
+                        weatherData: weatherData,
+                        aiItineraryData: aiItineraryData,
+                        destInput: document.getElementById('destinationInput').value
+                    }
+                }));
+            }
+        };
+
+
+    </script>
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --text-color: #0f172a;
+            --surface: #ffffff;
+            --border: #e2e8f0;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --eco: #10b981;
+            --danger: #ef4444;
+            --text-muted: #64748b;
+            --input-bg: #ffffff;
+        }
+
+        [data-theme="dark"] {
+            --bg-color: #0f172a;
+            --text-color: #f8fafc;
+            --surface: #1e293b;
+            --border: #334155;
+            --primary: #3b82f6;
+            --primary-hover: #60a5fa;
+            --eco: #34d399;
+            --text-muted: #94a3b8;
+            --input-bg: #0f172a;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background-color: var(--bg-color); color: var(--text-color); line-height: 1.5; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+        
+        header { display: flex; justify-content: space-between; align-items: center; padding: 1.2rem 2rem; background-color: var(--surface); border-bottom: 1px solid var(--border); height: 73px; }
+        
+        .settings-btn { background: transparent; border: 1px solid var(--border); color: var(--text-color); padding: 0.5rem 1.2rem; border-radius: 6px; cursor: pointer; font-weight: 500; transition: all 0.2s; }
+        .settings-btn:hover { border-color: var(--primary); color: var(--primary); }
+
+        .container { display: flex; height: calc(100vh - 73px); flex-grow: 1; position: relative; }
+        
+        .sidebar { width: 450px; background-color: var(--surface); display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; border-right: 1px solid var(--border); z-index: 20; }
+        
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        .resizer { width: 6px; background-color: var(--bg-color); cursor: col-resize; flex-shrink: 0; z-index: 10; transition: background-color 0.2s; }
+        .resizer:hover, .resizer:active { background-color: var(--primary); }
+
+        .map-pane { flex-grow: 1; position: relative; background-color: #e5e7eb; min-width: 0; }
+        #map { width: 100%; height: 100%; }
+
+        .map-toggle-btn { position: absolute; top: 15px; left: 15px; z-index: 10; background: var(--surface); border: 1px solid var(--border); color: var(--text-color); padding: 0.6rem 1.2rem; border-radius: 6px; cursor: pointer; font-weight: 500; }
+
+        .section { padding: 1.5rem; border-bottom: 1px solid var(--border); }
+        h2 { font-size: 1.2rem; font-weight: 600; margin-bottom: 1.2rem; }
+        h3 { font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; color: var(--primary); }
+
+        .form-group { margin-bottom: 1.2rem; }
+        label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 0.4rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+        input, select { width: 100%; padding: 0.75rem; border: 1px solid var(--border); border-radius: 6px; background-color: var(--input-bg); color: var(--text-color); outline: none; }
+        
+        .btn { width: 100%; padding: 0.8rem; background-color: var(--primary); color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; }
+        .btn-outline { background: transparent; border: 1px solid var(--primary); color: var(--primary); }
+        
+        .stop-wrapper { position: relative; margin-bottom: 1rem; }
+        .remove-stop { position: absolute; right: 10px; top: 32px; color: var(--danger); cursor: pointer; font-size: 0.85rem; font-weight: bold; }
+
+        .tabs { display: none; gap: 4px; padding: 1rem; background: var(--surface); border-bottom: 1px solid var(--border); overflow-x: auto; flex-wrap: nowrap; }
+        .tab-btn { flex: 1; min-width: 80px; padding: 0.5rem; background: transparent; border: 1px solid var(--border); color: var(--text-color); border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 0.9rem; text-align: center; }
+        .tab-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
+        .tab-btn.active[id="btn-Eco-Friendly"] { background: var(--eco); border-color: var(--eco); }
+
+        /* Timeline CSS */
+        .timeline { position: relative; margin-top: 1.5rem; padding-bottom: 1rem; }
+        .timeline::before { content: ''; position: absolute; left: 1rem; top: 0; bottom: 0; width: 2px; background: var(--border); z-index: 1; }
+        
+        .segment-card {
+            background-color: var(--input-bg); border: 1px solid var(--border); padding: 1rem;
+            border-radius: 8px; margin-bottom: 0.8rem; cursor: pointer;
+            position: relative; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-left: 2.5rem;
+        }
+        .segment-card::before {
+            content: ''; position: absolute; left: -1.9rem; top: 1.2rem; width: 14px; height: 14px;
+            border-radius: 50%; background: var(--primary); border: 3px solid var(--input-bg); z-index: 2;
+        }
+
+        .layover-card {
+            background-color: transparent; border: 1px dashed var(--border); padding: 0.6rem 1rem;
+            border-radius: 6px; margin-bottom: 0.8rem; margin-left: 2.5rem; position: relative;
+            color: var(--text-muted); font-size: 0.9rem; display: flex; align-items: center; gap: 10px;
+        }
+        .layover-card::before {
+            content: ''; position: absolute; left: -1.7rem; top: 1rem; width: 8px; height: 8px;
+            border-radius: 50%; background: var(--text-muted); z-index: 2; border: 2px solid var(--input-bg);
+        }
+
+        .weather-card {
+            display: flex; align-items: center; gap: 12px; background: rgba(59, 130, 246, 0.1);
+            border: 1px solid var(--primary); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;
+        }
+        .weather-icon { font-size: 2rem; }
+
+        .modal { display: none; position: fixed; inset: 0; background-color: rgba(0, 0, 0, 0.6); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+        .modal.active { display: flex; }
+        .modal-content { background-color: var(--surface); padding: 2.5rem; border-radius: 12px; width: 90%; max-width: 400px; }
+
+        /* Mobile Responsiveness (Bottom Sheet) */
+        @media (max-width: 768px) {
+            .container { flex-direction: column; }
+            .sidebar { width: 100%; border-right: none; height: 45vh; border-top: 1px solid var(--border); order: 2; box-shadow: 0 -4px 12px rgba(0,0,0,0.1); border-radius: 16px 16px 0 0; position: absolute; bottom: 0; }
+            .map-pane { height: 55vh; width: 100%; order: 1; position: absolute; top: 0; }
+            .resizer { display: none; }
+            header h1 { font-size: 1.1rem; }
+            .tabs { padding: 0.5rem; }
+        }
+    </style>
+</head>
+<body>
+    <header style="background: linear-gradient(135deg, var(--surface) 0%, rgba(59, 130, 246, 0.05) 100%); border-bottom: 1px solid var(--border);">
+        <h1 style="display:flex; align-items:center; gap: 8px; color: var(--primary);">
+            <svg width="32" height="32" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <!-- Custom WS Map Pin/Airplane Logo -->
+                <path d="M50 90 C 20 60, 20 20, 50 20 C 80 20, 80 60, 50 90 Z" stroke="url(#grad)" stroke-width="6" fill="none" />
+                <path d="M 35 45 L 42 60 L 50 50 L 58 60 L 65 45" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M 38 35 Q 50 25 62 35" stroke="currentColor" stroke-width="4" stroke-linecap="round" />
+                <defs>
+                    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#8b5cf6;stop-opacity:1" />
+                    </linearGradient>
+                </defs>
+            </svg>
+            <span style="font-weight: 800; font-size: 1.4rem; background: -webkit-linear-gradient(45deg, #3b82f6, #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">WS</span>
+        </h1>
+        <div style="display:flex; gap: 10px; align-items:center;">
+            <button id="authBtn" onclick="toggleAuthModal()" style="background:var(--primary); color:white; border:none; padding:8px 16px; border-radius:6px; font-weight:600; cursor:pointer;">Login</button>
+            <button id="saveTripBtn" onclick="saveCurrentTrip()" style="display:none; background:var(--success); color:white; border:none; padding:8px 16px; border-radius:6px; font-weight:600; cursor:pointer;">Save Trip</button>
+            <button class="settings-btn" onclick="document.getElementById('settingsModal').classList.add('active')">Settings</button>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="sidebar" id="sidebar">
+            <div class="section" id="plannerForm">
+                <h2>Plan Your Trip</h2>
+                <div class="form-group">
+                    <label>Origin</label>
+                    <input type="text" id="originInput" placeholder="Enter starting address">
+                </div>
+                <div id="stopsContainer"></div>
+                <button class="btn btn-outline" onclick="addStop()" style="margin-bottom: 1.5rem; padding: 0.6rem; font-size:0.9rem;">+ Add Stop</button>
+                <div class="form-group">
+                    <label>Destination</label>
+                    <input type="text" id="destinationInput" placeholder="Enter destination address">
+                </div>
+                <div class="form-group" id="durationGroup" style="margin-bottom: 1.5rem; display: none;">
+                    <label>Duration of stay (Days)</label>
+                    <input type="number" id="durationDaysInput" value="3" min="1">
+                </div>
+                <div style="margin-top: 1rem;">
+                    <label style="font-weight: 600; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase;">Allowed Modes</label>
+                    <div style="display: flex; gap: 10px; margin-top: 5px; flex-wrap: wrap;">
+                        <label><input type="checkbox" class="mode-cb" value="DRIVE" checked> Car/Taxi</label>
+                        <label><input type="checkbox" class="mode-cb" value="BICYCLE"> Bike</label>
+                        <label><input type="checkbox" class="mode-cb" value="FLIGHT" checked> Airplane</label>
+                        <label><input type="checkbox" class="mode-cb" value="TRANSIT" checked> Transit (Bus/Train/Ferry)</label>
+                    </div>
+                </div>
+                <button class="btn" id="calculateBtn" onclick="calculateRoute()">Calculate Route</button>
+            </div>
+            
+            <div id="resultsPane">
+                <div class="tabs" id="routeTabs">
+                    <button class="tab-btn active" id="btn-Fastest" onclick="showOption('Fastest')">Fastest</button>
+                    <button class="tab-btn" id="btn-Cheapest" onclick="showOption('Cheapest')">Cheapest</button>
+                    <button class="tab-btn" id="btn-Balanced" onclick="showOption('Balanced')">Balanced</button>
+                    <button class="tab-btn" id="btn-Eco-Friendly" onclick="showOption('Eco-Friendly')">Eco-Friendly</button>
+                </div>
+                <div id="routeDetails" style="padding: 1.5rem;"></div>
+            </div>
+        </div>
+        
+        <div class="resizer" id="resizer"></div>
+        
+        <div class="map-pane" id="mapPane">
+            <button class="map-toggle-btn" onclick="toggleMap()">Toggle Map</button>
+            <div id="map"></div>
+        </div>
+    </div>
+
+    
+    <!-- Auth Modal -->
+    <div id="authModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+        <div style="background:var(--surface); padding:2rem; border-radius:12px; width:90%; max-width:400px; border:1px solid var(--border);">
+            <h2 style="margin-top:0; color:var(--text);">Login / Signup</h2>
+            <input type="text" id="usernameInput" placeholder="Username" style="width:100%; padding:0.8rem; margin-bottom:1rem; border:1px solid var(--border); border-radius:6px; background:var(--bg-color); color:var(--text);">
+            <input type="password" id="passwordInput" placeholder="Password" style="width:100%; padding:0.8rem; margin-bottom:1rem; border:1px solid var(--border); border-radius:6px; background:var(--bg-color); color:var(--text);">
+            <div style="display:flex; gap:10px;">
+                <button onclick="handleAuth('login')" style="flex:1; background:var(--primary); color:white; border:none; padding:10px; border-radius:6px; cursor:pointer; font-weight:bold;">Login</button>
+                <button onclick="handleAuth('signup')" style="flex:1; background:transparent; color:var(--text); border:1px solid var(--border); padding:10px; border-radius:6px; cursor:pointer; font-weight:bold;">Sign Up</button>
+            </div>
+            <p id="authError" style="color:var(--danger); margin-top:10px; display:none;"></p>
+            <button onclick="toggleAuthModal()" style="margin-top:15px; width:100%; background:transparent; color:var(--text); border:none; cursor:pointer; text-decoration:underline;">Close</button>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal" id="settingsModal">
+        <div class="modal-content" style="max-height: 85vh; overflow-y: auto;">
+            <h2 style="margin-bottom: 1.5rem;">Settings</h2>
+            
+            <div class="form-group" style="margin-bottom: 1.5rem;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; font-size:1rem; color:var(--text-color);">
+                    <input type="checkbox" id="wheelchairToggle" style="width:auto; margin:0; padding:0; cursor:pointer;">
+                    ♿ Wheelchair Accessible Routing
+                </label>
+            </div>
+
+            <div class="form-group" style="padding: 1rem; border: 1px solid var(--primary); border-radius: 8px; background: rgba(59,130,246,0.05); margin-bottom: 1.5rem;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; font-size:1.1rem; color:var(--primary); font-weight:600; margin-bottom:1rem;">
+                    <input type="checkbox" id="plannerModeToggle" style="width:auto; margin:0; padding:0; cursor:pointer;" onchange="document.getElementById('plannerModeOptions').style.display = this.checked ? 'block' : 'none'; document.getElementById('durationGroup').style.display = this.checked ? 'block' : 'none'; if(this.checked) document.getElementById('aiPlannerToggle').checked = true;">
+                    ✨ Planner Mode
+                </label>
+                <div id="plannerModeOptions" style="display:none; padding-left:1.5rem; border-left: 2px solid var(--primary); margin-left: 0.5rem;">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; margin-bottom:0.8rem; font-size:0.9rem;">
+                        <input type="checkbox" id="aiPlannerToggle" checked style="width:auto; margin:0;" onchange="if(this.checked) document.getElementById('plannerModeToggle').checked = true;"> Enable AI Trip Planner
+                    </label>
+                    <div class="form-group" style="margin-bottom:0.8rem;">
+                        <label style="font-size: 0.8rem;">Interests / Tags</label>
+                        <input type="text" id="interestsInput" placeholder="e.g. Museums, Nature, Food" style="padding: 0.5rem; font-size: 0.9rem;">
+                    </div>
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; margin-bottom:0.8rem; font-size:0.9rem;">
+                        <input type="checkbox" id="recommendPlacesToggle" style="width:auto; margin:0;"> Recommend Places
+                    </label>
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; margin-bottom:0.8rem; font-size:0.9rem;">
+                        <input type="checkbox" id="photosToggle" style="width:auto; margin:0;"> Fetch Photos & Ratings
+                    </label>
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; margin-bottom:0.8rem; font-size:0.9rem;">
+                        <input type="checkbox" id="detoursToggle" style="width:auto; margin:0;"> Show Worth a Detour
+                    </label>
+                </div>
+            </div>
+            
+            <div class="form-group" style="margin-bottom: 1.5rem;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; font-size:1rem; color:var(--text-color);">
+                    <input type="checkbox" id="mapVisibleToggle" checked style="width:auto; margin:0; padding:0; cursor:pointer;" onchange="if(this.checked){document.getElementById('mapPane').style.display='block';if(window.innerWidth>768){resizer.style.display='block';sidebar.style.width='450px';}}else{document.getElementById('mapPane').style.display='none';resizer.style.display='none';sidebar.style.width='100vw';}">
+                    🗺️ Show Map View
+                </label>
+            </div>
+
+            <div class="form-group"><label>Max Budget ($)</label><input type="number" id="maxBudget" placeholder="Leave empty for unlimited"></div>
+
+            <div class="form-group"><label>Expressway Speed (km/h)</label><input type="number" id="expresswaySpeed" value="100"></div>
+            <div class="form-group"><label>Highway Speed (km/h)</label><input type="number" id="highwaySpeed" value="80"></div>
+            <div class="form-group"><label>Main Road Speed (km/h)</label><input type="number" id="mainRoadSpeed" value="50"></div>
+            <div class="form-group" style="margin-bottom: 2rem;">
+                <label>Theme</label>
+                <select id="themeSelect" onchange="document.documentElement.setAttribute('data-theme', this.value)">
+                    <option value="dark">Dark</option>
+                    <option value="light">Light</option>
+                </select>
+            </div>
+            <button class="btn" onclick="document.getElementById('settingsModal').classList.remove('active')">Save & Close</button>
+        </div>
+    </div>
+
+    <script>
+        let map;
+        let polylines = [];
+        let routeOptions = {};
+        let weatherData = null;
+        let aiItinerary = [];
+        let packingList = [];
+        let stopCount = 0;
+        let chartInstance = null;
+
+        const resizer = document.getElementById('resizer');
+        const sidebar = document.getElementById('sidebar');
+        let isResizing = false;
+
+        resizer.addEventListener('mousedown', () => { isResizing = true; document.body.style.cursor = 'col-resize'; });
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing || window.innerWidth <= 768) return;
+            const newWidth = Math.max(320, Math.min(e.clientX, window.innerWidth - 300));
+            sidebar.style.width = `${newWidth}px`;
+        });
+        document.addEventListener('mouseup', () => { isResizing = false; document.body.style.cursor = 'default'; });
+
+        function toggleMap() {
+            const mapPane = document.getElementById('mapPane');
+            if (mapPane.style.display === 'none') {
+                mapPane.style.display = 'block';
+                if(window.innerWidth > 768) {
+                    resizer.style.display = 'block';
+                    sidebar.style.width = '450px';
+                }
+            } else {
+                mapPane.style.display = 'none';
+                resizer.style.display = 'none';
+                sidebar.style.width = '100vw';
+            }
+        }
+
+        fetch('/api/config').then(res => res.json()).then(data => {
+            const script = document.createElement('script');
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${data.google_maps_api_key}&libraries=places,geometry&callback=initMap`;
+            script.async = true; script.defer = true;
+            document.head.appendChild(script);
+        });
+
+        window.initMap = function() {
+            map = new google.maps.Map(document.getElementById("map"), {
+                center: { lat: 20.0, lng: 0.0 }, zoom: 3, streetViewControl: false,
+                styles: document.documentElement.getAttribute('data-theme') === 'dark' ? [
+                    { elementType: "geometry", stylers: [{ color: "#242f3e" }] },
+                    { elementType: "labels.text.stroke", stylers: [{ color: "#242f3e" }] },
+                    { elementType: "labels.text.fill", stylers: [{ color: "#746855" }] },
+                    { featureType: "administrative.locality", elementType: "labels.text.fill", stylers: [{ color: "#d59563" }] },
+                    { featureType: "water", elementType: "geometry", stylers: [{ color: "#17263c" }] }
+                ] : []
+            });
+            new google.maps.places.Autocomplete(document.getElementById('originInput'));
+            new google.maps.places.Autocomplete(document.getElementById('destinationInput'));
+        };
+
+        function addStop() {
+            stopCount++;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'stop-wrapper';
+            wrapper.innerHTML = `<label>Stop ${stopCount}</label><input type="text" class="stop-input" placeholder="Enter stop address"><span class="remove-stop" onclick="this.parentElement.remove()">Remove</span>`;
+            document.getElementById('stopsContainer').appendChild(wrapper);
+            if (window.google && window.google.maps) new google.maps.places.Autocomplete(wrapper.querySelector('input'));
+        }
+
+        async function calculateRoute() {
+            const btn = document.getElementById('calculateBtn');
+            const details = document.getElementById('routeDetails');
+            btn.innerText = 'Calculating...';
+            document.getElementById('routeTabs').style.display = 'none';
+            details.innerHTML = '';
+            
+            const origin = document.getElementById('originInput').value;
+            const dest = document.getElementById('destinationInput').value;
+            const expSpeed = parseFloat(document.getElementById('expresswaySpeed').value) || 100;
+            const hwSpeed = parseFloat(document.getElementById('highwaySpeed').value) || 80;
+            const mrSpeed = parseFloat(document.getElementById('mainRoadSpeed').value) || 50;
+            const wheelchair = document.getElementById('wheelchairToggle').checked;
+            const planner_mode = document.getElementById('plannerModeToggle').checked;
+            const ai_planner = document.getElementById('aiPlannerToggle').checked;
+            const recommend_places = document.getElementById('recommendPlacesToggle').checked;
+            const photos = document.getElementById('photosToggle').checked;
+            const detours = document.getElementById('detoursToggle').checked;
+            const interests = document.getElementById('interestsInput').value;
+            const maxBudgetVal = document.getElementById('maxBudget').value;
+            const max_budget = maxBudgetVal ? parseFloat(maxBudgetVal) : null;
+            const duration_days = parseInt(document.getElementById('durationDaysInput').value) || 3;
+            const stops = Array.from(document.querySelectorAll('.stop-input')).map(i => i.value).filter(v => v);
+            const modes = Array.from(document.querySelectorAll('.mode-cb:checked')).map(cb => cb.value);
+
+            try {
+                const res = await fetch('/api/routes', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        source: origin, destination: dest, stops: stops, allowed_modes: modes,
+                        expressway_speed: expSpeed, highway_speed: hwSpeed, main_road_speed: mrSpeed, 
+                        wheelchair: wheelchair, planner_mode: planner_mode, ai_planner: ai_planner,
+                        recommend_places: recommend_places, photos: photos, detours: detours,
+                        interests: interests, max_budget: max_budget, duration_days: duration_days
+                    })
+                });
+                const data = await res.json();
+                
+                if (data.error || !data.routes || data.routes.length === 0) {
+                    details.innerHTML = `<div style="padding: 1.5rem; background: rgba(239, 68, 68, 0.1); border: 1px solid var(--danger); border-radius: 8px; color: var(--danger);"><strong>Error:</strong> ${data.error || 'No route generated.'}</div>`;
+                    return;
+                }
+                
+                routeOptions = {};
+                data.routes.forEach(r => routeOptions[r.type] = r);
+                weatherData = data.weather;
+                aiItinerary = data.ai_itinerary || [];
+                packingList = data.packing_list || [];
+                
+                document.getElementById('routeTabs').style.display = 'flex';
+                ['Fastest', 'Cheapest', 'Balanced', 'Eco-Friendly'].forEach(t => {
+                    document.getElementById(`btn-${t}`).style.display = routeOptions[t] ? 'block' : 'none';
+                });
+                
+                if (routeOptions['Fastest']) showOption('Fastest');
+                else if (routeOptions['Eco-Friendly']) showOption('Eco-Friendly');
+                else showOption(Object.keys(routeOptions)[0]);
+                
+            } catch (e) {
+                details.innerHTML = `<p style="color:var(--danger);">Network error fetching routes.</p>`;
+            } finally {
+                btn.innerText = 'Calculate Route';
+            }
+        }
+
+        function formatDuration(totalMins) {
+            const days = Math.floor(totalMins / 1440), hrs = Math.floor((totalMins % 1440) / 60), mins = totalMins % 60;
+            let p = [];
+            if (days > 0) p.push(`${days}d`); if (hrs > 0) p.push(`${hrs}h`); if (mins > 0 || p.length === 0) p.push(`${mins}m`);
+            return p.join(' ');
+        }
+
+        function getWeatherEmoji(code) {
+            if (code <= 3) return "☀️";
+            if (code <= 48) return "⛅";
+            if (code <= 67) return "🌧️";
+            if (code <= 77) return "❄️";
+            return "🌩️";
+        }
+
+        function downloadPDF() {
+            const element = document.getElementById('exportContent');
+            const opt = {
+                margin: 0.5,
+                filename: 'Travel_Itinerary.pdf',
+                image: { type: 'jpeg', quality: 0.98 },
+                html2canvas: { scale: 2 },
+                jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
+            };
+            html2pdf().set(opt).from(element).save();
+        }
+
+        function showOption(type) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            const activeBtn = document.querySelector(`.tab-btn[onclick="showOption('${type}')"]`);
+            if (activeBtn) activeBtn.classList.add('active');
+            
+            const option = routeOptions[type];
+            if (!option) return;
+            
+            let html = `<div id="exportContent">`;
+            
+            if (weatherData) {
+                html += `
+                <div class="weather-card">
+                    <div class="weather-icon">${getWeatherEmoji(weatherData.weathercode)}</div>
+                    <div>
+                        <div style="font-weight: 600;">Destination Weather</div>
+                        <div style="font-size: 0.9rem; color: var(--text-muted);">${weatherData.temperature}°C, Wind ${weatherData.windspeed} km/h</div>
+                    </div>
+                </div>`;
+            }
+
+            if (option.exceeds_budget) {
+                html += `
+                <div style="padding: 1rem; margin-bottom: 1.5rem; background: rgba(239, 68, 68, 0.1); border: 1px solid var(--danger); border-radius: 8px; color: var(--danger);">
+                    <strong>⚠️ Over Budget:</strong> This route's estimated cost exceeds your maximum budget.
+                </div>`;
+            }
+
+            const headerColor = type === 'Eco-Friendly' ? 'var(--eco)' : 'var(--primary)';
+            html += `
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem;">
+                    <div>
+                        <h3 style="color: ${headerColor}; font-size: 1.1rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;">${type} Route</h3>
+                        <div style="font-size: 1.8rem; font-weight: 700; color: var(--text-color); line-height: 1.2;">
+                            ${formatDuration(option.total_duration_mins)}
+                        </div>
+                        <div style="font-size: 0.9rem; font-weight: 600; color: var(--eco); margin-top: 0.5rem;">🍃 ${option.total_co2_kg.toFixed(1)} kg CO₂</div>
+                    </div>
+                    <button class="btn btn-outline" style="width: auto; padding: 0.5rem 1rem; font-size: 0.85rem;" onclick="downloadPDF()">Export PDF</button>
+                </div>
+                <div class="timeline">
+            `;
+            
+            option.segments.forEach(seg => {
+                if (seg.mode === 'LAYOVER') {
+                    html += `
+                        <div class="layover-card">
+                            <span>⏱️</span>
+                            <div>
+                                <div style="font-weight:600; font-size: 0.9rem;">${seg.description}</div>
+                                <div style="font-size: 0.8rem; color: var(--text-muted);">${formatDuration(seg.duration_mins)}</div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                        let googleFlightsUrl = '';
+                        if (seg.mode === 'FLIGHT') {
+                            const parts = seg.description.split('->').map(p => p.trim());
+                            const flightQuery = parts.length === 2 ? `flights from ${parts[0]} to ${parts[1]}` : `flights`;
+                            googleFlightsUrl = `https://www.google.com/travel/flights?q=${encodeURIComponent(flightQuery)}`;
+                        }
+
+                        let detoursHtml = '';
+                        if (seg.detours && seg.detours.length > 0) {
+                            detoursHtml = `<div style="margin-top: 1rem; padding-top: 0.8rem; border-top: 1px dashed var(--border);">
+                                <div style="font-size: 0.85rem; font-weight: 600; color: var(--primary); margin-bottom: 0.5rem;">📍 Worth a Detour:</div>
+                                <div style="display:flex; gap: 8px; overflow-x: auto; padding-bottom: 5px;">
+                                    ${seg.detours.map(d => `
+                                        <div style="min-width: 120px; max-width: 140px; background: var(--bg-color); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; font-size: 0.8rem;">
+                                            ${d.photo_url ? `<img src="${d.photo_url}" style="width:100%; height:60px; object-fit:cover;">` : ''}
+                                            <div style="padding: 0.4rem;">
+                                                <div style="font-weight:600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${d.name}</div>
+                                                <div style="color: var(--text-muted); font-size: 0.75rem;">⭐ ${d.rating || 'N/A'} (${d.user_ratings_total || 0})</div>
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>`;
+                        }
+
+                        html += `
+                            <div class="segment-card">
+                                <div style="font-weight: 600; font-size: 1.05rem;">${seg.description}</div>
+                                <div style="margin-top: 0.5rem; font-size: 0.9rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+                                    <span>Duration: <strong style="color: var(--text-color);">${formatDuration(seg.duration_mins)}</strong></span>
+                                    <span style="color: var(--eco);">🍃 ${seg.co2_emissions_kg} kg</span>
+                                </div>
+                                ${seg.mode === 'FLIGHT' ? `<a href="${googleFlightsUrl}" target="_blank" class="btn" style="padding: 0.4rem; font-size:0.8rem; display:inline-block; margin-top:1rem; text-decoration:none; text-align:center; width:auto; background:var(--surface); border: 1px solid var(--primary); color:var(--primary);">✈️ Search Google Flights</a>` : ''}
+                                ${detoursHtml}
+                            </div>
+                        `;
+                }
+            });
+            html += `</div>`; // close timeline
+            
+
+
+            // Add Smart Packing List
+            if(packingList.length > 0) {
+                html += `
+                <div style="margin-top: 2rem;">
+                    <h3>🧳 Smart Packing List</h3>
+                    <ul style="margin-left: 1.5rem; color: var(--text-muted); margin-bottom: 2.5rem; font-size: 0.95rem; line-height: 1.8;">
+                        ${packingList.map(item => `<li>${item}</li>`).join('')}
+                    </ul>
+                </div>`;
+            }
+
+            // Add AI Itinerary
+            if(aiItinerary.length > 0) {
+                html += `
+                <div style="margin-top: 2rem;">
+                    <h3>🤖 AI Itinerary Suggestions</h3>
+                    ${aiItinerary.map(day => `
+                        <div class="segment-card" style="margin-left:0; cursor:default; box-shadow:none;">
+                            <div style="font-weight:600; color:var(--text-color); font-size: 1.05rem;">${day.day}: ${day.title}</div>
+                            <ul style="margin-left: 0; margin-top: 0.8rem; color: var(--text-muted); font-size: 0.95rem; line-height: 1.6; list-style-type:none;">
+                                ${day.activities.map(a => {
+                                    if (typeof a === 'string') return `<li style="margin-bottom:0.5rem; padding-left:1.5rem; position:relative;"><span style="position:absolute; left:0;">•</span>${a}</li>`;
+                                    return `
+                                    <li style="margin-bottom:1rem; border: 1px solid var(--border); border-radius: 8px; overflow:hidden; background: var(--bg-color);">
+                                        ${a.photo_url ? `<img src="${a.photo_url}" style="width:100%; height:120px; object-fit:cover; border-bottom: 1px solid var(--border);">` : ''}
+                                        <div style="padding: 0.8rem;">
+                                            <div style="font-weight:600; color: var(--text-color); font-size: 1rem;">${a.name}</div>
+                                            <div style="color: var(--text-muted); font-size: 0.85rem; margin-top: 4px;">⭐ ${a.rating || 'N/A'} (${a.user_ratings_total || 0} reviews)</div>
+                                        </div>
+                                    </li>`;
+                                }).join('')}
+                            </ul>
+                        </div>
+                    `).join('')}
+                </div>`;
+            }
+
+            html += `</div>`; // close exportContent
+            
+            document.getElementById('routeDetails').innerHTML = html;
+            
+
+            
+            drawRouteOnMap(option);
+        }
+
+        function drawRouteOnMap(option) {
+            polylines.forEach(p => p.setMap(null));
+            polylines = [];
+            if (!map || !google.maps.geometry) return;
+            const bounds = new google.maps.LatLngBounds();
+            
+            option.segments.forEach(seg => {
+                try {
+                    if(seg.mode === 'LAYOVER') return;
+                    if (seg.polyline && seg.polyline.encodedPolyline) {
+                        const path = google.maps.geometry.encoding.decodePath(seg.polyline.encodedPolyline);
+                        const color = seg.mode === 'FLIGHT' ? '#ef4444' : (seg.mode === 'TRANSIT' ? '#10b981' : '#3b82f6');
+                        const poly = new google.maps.Polyline({ path, geodesic: true, strokeColor: color, strokeOpacity: 0.8, strokeWeight: 4, map });
+                        polylines.push(poly);
+                        path.forEach(p => bounds.extend(p));
+                    } else if (seg.start && seg.end) {
+                        const sLat = typeof seg.start.lat !== 'undefined' ? seg.start.lat : seg.start[0];
+                        const sLng = typeof seg.start.lng !== 'undefined' ? seg.start.lng : seg.start[1];
+                        const eLat = typeof seg.end.lat !== 'undefined' ? seg.end.lat : seg.end[0];
+                        const eLng = typeof seg.end.lng !== 'undefined' ? seg.end.lng : seg.end[1];
+                        
+                        if(sLat !== undefined && sLng !== undefined && eLat !== undefined && eLng !== undefined) {
+                            const path = [new google.maps.LatLng(Number(sLat), Number(sLng)), new google.maps.LatLng(Number(eLat), Number(eLng))];
+                            const poly = new google.maps.Polyline({ path: path, geodesic: true, strokeColor: '#ef4444', strokeOpacity: 0.8, strokeWeight: 3, map: map });
+                            polylines.push(poly);
+                            bounds.extend(path[0]); bounds.extend(path[1]);
+                        }
+                    }
+                } catch(e) {
+                    console.error('Error drawing segment on map:', e);
+                }
+            });
+            if (!bounds.isEmpty()) map.fitBounds(bounds);
+        }
+
+        function toggleChat() {
+            const chat = document.getElementById('chatbot-window');
+            chat.style.display = chat.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        async function sendChat() {
+            const input = document.getElementById('chat-input');
+            const msg = input.value.trim();
+            if(!msg) return;
+            
+            const messages = document.getElementById('chat-messages');
+            
+                messages.innerHTML += `<div style="background:var(--primary); color:white; padding:0.8rem; border-radius:8px; align-self:flex-end; max-width:85%;">${msg}</div>`;
+                input.value = '';
+                
+                if(ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'chat',
+                        sender: currentUser?.username || 'Guest',
+                        text: msg
+                    }));
+                }
+
+            
+            messages.innerHTML += `<div id="typing-indicator" style="background:var(--bg-color); padding:0.8rem; border-radius:8px; align-self:flex-start; max-width:85%; border:1px solid var(--border); font-style:italic;">Thinking...</div>`;
+            messages.scrollTop = messages.scrollHeight;
+            
+            try {
+                let contextStr = "No trip planned yet.";
+                if (Object.keys(routeOptions).length > 0) {
+                    const opt = routeOptions[Object.keys(routeOptions)[0]];
+                    contextStr = `Trip to ${document.getElementById('destinationInput').value || 'Destination'}, Duration: ${opt.total_duration_mins} mins.`;
+                }
+                
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: msg, context: contextStr })
+                });
+                const data = await response.json();
+                
+                document.getElementById('typing-indicator').remove();
+                
+                const formattedResponse = typeof marked !== 'undefined' ? marked.parse(data.response) : data.response.replace(/\n/g, '<br>');
+                messages.innerHTML += `<div class="markdown-body" style="background:var(--bg-color); padding:0.8rem; border-radius:8px; align-self:flex-start; max-width:85%; border:1px solid var(--border); line-height: 1.5; overflow-x: auto;">${formattedResponse}</div>`;
+                messages.scrollTop = messages.scrollHeight;
+            } catch(e) {
+                const safeMsg = msg.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                document.getElementById('typing-indicator').remove();
+                messages.innerHTML += `
+                    <div style="background:var(--bg-color); padding:0.8rem; border-radius:8px; align-self:flex-start; max-width:85%; border:1px solid var(--border); color: var(--danger);">
+                        Error connecting to AI.<br>
+                        <button onclick="retryChat('${safeMsg}')" style="margin-top: 6px; background: none; border: 1px solid var(--danger); color: var(--danger); border-radius: 4px; padding: 4px 10px; font-size: 0.8rem; cursor: pointer;">Retry</button>
+                    </div>`;
+                messages.scrollTop = messages.scrollHeight;
+            }
+        }
+        
+        function retryChat(msg) {
+            document.getElementById('chat-input').value = msg;
+            sendChat();
+        }
+        
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').then((registration) => {
+                    console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                }, (err) => {
+                    console.log('ServiceWorker registration failed: ', err);
+                });
+            });
+        }
+    
+        // Auth Logic
+        let currentUser = null;
+        
+        function toggleAuthModal() {
+            const modal = document.getElementById('authModal');
+            modal.style.display = modal.style.display === 'flex' ? 'none' : 'flex';
+        }
+        
+        async function handleAuth(action) {
+            const user = document.getElementById('usernameInput').value;
+            const pass = document.getElementById('passwordInput').value;
+            if(!user || !pass) return;
+            
+            try {
+                const res = await fetch(`/api/${action}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username: user, password: pass})
+                });
+                const data = await res.json();
+                if(res.ok) {
+                    if(action === 'login') {
+                        currentUser = data;
+                        document.getElementById('authBtn').innerText = `Hi, ${user}`;
+                        document.getElementById('saveTripBtn').style.display = 'block';
+                        toggleAuthModal();
+                    } else {
+                        document.getElementById('authError').style.display = 'block';
+                        document.getElementById('authError').style.color = 'var(--success)';
+                        document.getElementById('authError').innerText = 'Signup successful! Please login.';
+                    }
+                } else {
+                    document.getElementById('authError').style.display = 'block';
+                    document.getElementById('authError').style.color = 'var(--danger)';
+                    document.getElementById('authError').innerText = data.detail || 'Error';
+                }
+            } catch(e) {
+                console.error(e);
+            }
+        }
+
+        async function saveCurrentTrip() {
+            if(!currentUser || !tripId) return;
+            
+            const stateToSave = {
+                routeOptions: routeOptions,
+                weatherData: weatherData,
+                aiItineraryData: aiItineraryData,
+                destInput: document.getElementById('destinationInput').value
+            };
+            
+            await fetch('/api/trips/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    user_id: parseInt(currentUser.token),
+                    trip_id: tripId,
+                    destination: stateToSave.destInput,
+                    data_json: JSON.stringify(stateToSave)
+                })
+            });
+            alert("Trip saved!");
+        }
+
+        // WebSockets Logic
+        let ws;
+        const urlParams = new URLSearchParams(window.location.search);
+        let tripId = urlParams.get('trip');
+        
+        if(!tripId) {
+            tripId = Math.random().toString(36).substring(2, 10);
+            window.history.replaceState({}, '', `?trip=${tripId}`);
+        }
+        
+        // Notify others of room sharing
+        console.log("Multiplayer Room ID: ", tripId);
+        
+        function initWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws/${tripId}`);
+            
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if(data.type === 'calculate') {
+                    // Prevent infinite loops if we are the sender
+                    if(data.sender === currentUser?.username) return;
+                    
+                    // Someone else calculated a route, update our UI!
+                    routeOptions = data.state.routeOptions;
+                    weatherData = data.state.weatherData;
+                    aiItineraryData = data.state.aiItineraryData;
+                    document.getElementById('destinationInput').value = data.state.destInput;
+                    
+                    // Re-render UI
+                    renderRouteCards();
+                    if(weatherData) document.getElementById('weather-info').innerHTML = `<strong>${weatherData.temperature}°C</strong>, ${weatherData.condition}`;
+                    if(aiItineraryData) renderItinerary(aiItineraryData);
+                    
+                    // If map is active, we'd need to re-draw. For simplicity, we just trigger selectRoute on the Fastest one
+                    if(Object.keys(routeOptions).length > 0) {
+                        selectRoute(Object.keys(routeOptions)[0]);
+                    }
+                } else if(data.type === 'chat') {
+                    const messages = document.getElementById('chat-messages');
+                    messages.innerHTML += `<div style="background:var(--surface); padding:0.8rem; border-radius:8px; align-self:flex-start; max-width:85%; border:1px solid var(--border); line-height: 1.5; font-size: 0.9em;"><strong>${data.sender}:</strong> ${data.text}</div>`;
+                    messages.scrollTop = messages.scrollHeight;
+                }
+            };
+        }
+        
+        window.addEventListener('load', initWebSocket);
+
+        // Intercept Calculate Route to Broadcast State
+        const originalCalculateRoute = calculateRoute;
+        calculateRoute = async function() {
+            await originalCalculateRoute();
+            
+            // Broadcast new state to room
+            if(ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'calculate',
+                    sender: currentUser?.username || 'Guest',
+                    state: {
+                        routeOptions: routeOptions,
+                        weatherData: weatherData,
+                        aiItineraryData: aiItineraryData,
+                        destInput: document.getElementById('destinationInput').value
+                    }
+                }));
+            }
+        };
+
+
+    </script>
+
+    <!-- Chatbot UI -->
+    <div id="chatbot-btn" onclick="toggleChat()" style="position:fixed; bottom:20px; right:20px; width:60px; height:60px; border-radius:50%; background:var(--primary); color:white; display:flex; align-items:center; justify-content:center; font-size:1.8rem; cursor:pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index:1000; transition: transform 0.2s;">
+        💬
+    </div>
+    
+    <div id="chatbot-window" style="display:none; position:fixed; bottom:90px; right:20px; width:450px; max-width:90vw; height:600px; background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); z-index:1000; flex-direction:column;">
+        <div style="padding:1rem; background:var(--primary); color:white; border-radius:12px 12px 0 0; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
+            <span style="display:flex; align-items:center; gap:8px;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                WanderSync AI
+            </span>
+            <span onclick="toggleChat()" style="cursor:pointer; font-size:1.2rem; line-height:1;">&times;</span>
+        </div>
+        <div id="chat-messages" style="flex-grow:1; padding:1rem; overflow-y:auto; display:flex; flex-direction:column; gap:10px; font-size:0.9rem;">
+            <div style="background:var(--bg-color); padding:0.8rem; border-radius:8px; align-self:flex-start; max-width:85%; border:1px solid var(--border);">Hello! Ask me about your budget, packing list, or weather!</div>
+        </div>
+        <div style="padding:1rem; border-top:1px solid var(--border); display:flex; gap:8px;">
+            <input type="text" id="chat-input" placeholder="Type a message..." style="flex-grow:1; padding:0.6rem; margin:0;" onkeypress="if(event.key==='Enter') sendChat()">
+            <button onclick="sendChat()" style="background:var(--primary); border:none; color:white; padding:0 1rem; border-radius:6px; cursor:pointer; font-weight:600;">Send</button>
+        </div>
+    </div>
+</body>
+</html>
