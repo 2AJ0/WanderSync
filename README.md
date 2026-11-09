@@ -8,16 +8,16 @@
 - **Collaborative Multiplayer:** Uses WebSockets to sync the map, routes, and chat across multiple users in real-time. Just share the `?trip=id` link!
 - **Progressive Web App (PWA):** Installable on Desktop/Mobile with offline caching support via Service Workers.
 - **Integrated AI Chatbot:** Interactive Markdown-supported Chatbot to help you plan your trip natively in the UI.
-- **User Authentication:** Built-in SQLite + SQLAlchemy local database to sign up and save your favorite trips.
+- **Collaborative Planning:** Share a trip link to sync routes and chat with other users in real-time.
 
 ## 🚀 Tech Stack
-- **Backend:** Python, FastAPI, WebSockets, Uvicorn, SQLAlchemy
+- **Backend:** Python, FastAPI, WebSockets, Uvicorn
 - **Frontend:** Vanilla JS, HTML/CSS, Google Maps API, `marked.js`
 - **APIs:** Google Routes API, SerpAPI, Google Gemini, Groq (Llama/GPT)
 
 ## 🛠️ Local Setup
 1. Clone the repository.
-2. Install dependencies: `pip install fastapi uvicorn httpx sqlalchemy googlemaps haversine`
+2. Install dependencies: `pip install -r requirements.txt`
 3. Create a `.env` file with your API keys:
    ```env
    GOOGLE_MAPS_API_KEY=your_key

@@ -17,277 +17,9 @@
 
     <link rel="manifest" href="/manifest.json">
     <!-- PDF Export Library -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js">
-        // Auth Logic
-        let currentUser = null;
-        
-        function toggleAuthModal() {
-            const modal = document.getElementById('authModal');
-            modal.style.display = modal.style.display === 'flex' ? 'none' : 'flex';
-        }
-        
-        async function handleAuth(action) {
-            const user = document.getElementById('usernameInput').value;
-            const pass = document.getElementById('passwordInput').value;
-            if(!user || !pass) return;
-            
-            try {
-                const res = await fetch(`/api/${action}`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({username: user, password: pass})
-                });
-                const data = await res.json();
-                if(res.ok) {
-                    if(action === 'login') {
-                        currentUser = data;
-                        document.getElementById('authBtn').innerText = `Hi, ${user}`;
-                        document.getElementById('saveTripBtn').style.display = 'block';
-                        toggleAuthModal();
-                    } else {
-                        document.getElementById('authError').style.display = 'block';
-                        document.getElementById('authError').style.color = 'var(--success)';
-                        document.getElementById('authError').innerText = 'Signup successful! Please login.';
-                    }
-                } else {
-                    document.getElementById('authError').style.display = 'block';
-                    document.getElementById('authError').style.color = 'var(--danger)';
-                    document.getElementById('authError').innerText = data.detail || 'Error';
-                }
-            } catch(e) {
-                console.error(e);
-            }
-        }
-
-        async function saveCurrentTrip() {
-            if(!currentUser || !tripId) return;
-            
-            const stateToSave = {
-                routeOptions: routeOptions,
-                weatherData: weatherData,
-                aiItineraryData: aiItineraryData,
-                destInput: document.getElementById('destinationInput').value
-            };
-            
-            await fetch('/api/trips/save', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    user_id: parseInt(currentUser.token),
-                    trip_id: tripId,
-                    destination: stateToSave.destInput,
-                    data_json: JSON.stringify(stateToSave)
-                })
-            });
-            alert("Trip saved!");
-        }
-
-        // WebSockets Logic
-        let ws;
-        const urlParams = new URLSearchParams(window.location.search);
-        let tripId = urlParams.get('trip');
-        
-        if(!tripId) {
-            tripId = Math.random().toString(36).substring(2, 10);
-            window.history.replaceState({}, '', `?trip=${tripId}`);
-        }
-        
-        // Notify others of room sharing
-        console.log("Multiplayer Room ID: ", tripId);
-        
-        function initWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${window.location.host}/ws/${tripId}`);
-            
-            ws.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                if(data.type === 'calculate') {
-                    // Prevent infinite loops if we are the sender
-                    if(data.sender === currentUser?.username) return;
-                    
-                    // Someone else calculated a route, update our UI!
-                    routeOptions = data.state.routeOptions;
-                    weatherData = data.state.weatherData;
-                    aiItineraryData = data.state.aiItineraryData;
-                    document.getElementById('destinationInput').value = data.state.destInput;
-                    
-                    // Re-render UI
-                    renderRouteCards();
-                    if(weatherData) document.getElementById('weather-info').innerHTML = `<strong>${weatherData.temperature}°C</strong>, ${weatherData.condition}`;
-                    if(aiItineraryData) renderItinerary(aiItineraryData);
-                    
-                    // If map is active, we'd need to re-draw. For simplicity, we just trigger selectRoute on the Fastest one
-                    if(Object.keys(routeOptions).length > 0) {
-                        selectRoute(Object.keys(routeOptions)[0]);
-                    }
-                } else if(data.type === 'chat') {
-                    const messages = document.getElementById('chat-messages');
-                    messages.innerHTML += `<div style="background:var(--surface); padding:0.8rem; border-radius:8px; align-self:flex-start; max-width:85%; border:1px solid var(--border); line-height: 1.5; font-size: 0.9em;"><strong>${data.sender}:</strong> ${data.text}</div>`;
-                    messages.scrollTop = messages.scrollHeight;
-                }
-            };
-        }
-        
-        window.addEventListener('load', initWebSocket);
-
-        // Intercept Calculate Route to Broadcast State
-        const originalCalculateRoute = calculateRoute;
-        calculateRoute = async function() {
-            await originalCalculateRoute();
-            
-            // Broadcast new state to room
-            if(ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                    type: 'calculate',
-                    sender: currentUser?.username || 'Guest',
-                    state: {
-                        routeOptions: routeOptions,
-                        weatherData: weatherData,
-                        aiItineraryData: aiItineraryData,
-                        destInput: document.getElementById('destinationInput').value
-                    }
-                }));
-            }
-        };
-
-
-    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <!-- Chart.js for Budget -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js">
-        // Auth Logic
-        let currentUser = null;
-        
-        function toggleAuthModal() {
-            const modal = document.getElementById('authModal');
-            modal.style.display = modal.style.display === 'flex' ? 'none' : 'flex';
-        }
-        
-        async function handleAuth(action) {
-            const user = document.getElementById('usernameInput').value;
-            const pass = document.getElementById('passwordInput').value;
-            if(!user || !pass) return;
-            
-            try {
-                const res = await fetch(`/api/${action}`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({username: user, password: pass})
-                });
-                const data = await res.json();
-                if(res.ok) {
-                    if(action === 'login') {
-                        currentUser = data;
-                        document.getElementById('authBtn').innerText = `Hi, ${user}`;
-                        document.getElementById('saveTripBtn').style.display = 'block';
-                        toggleAuthModal();
-                    } else {
-                        document.getElementById('authError').style.display = 'block';
-                        document.getElementById('authError').style.color = 'var(--success)';
-                        document.getElementById('authError').innerText = 'Signup successful! Please login.';
-                    }
-                } else {
-                    document.getElementById('authError').style.display = 'block';
-                    document.getElementById('authError').style.color = 'var(--danger)';
-                    document.getElementById('authError').innerText = data.detail || 'Error';
-                }
-            } catch(e) {
-                console.error(e);
-            }
-        }
-
-        async function saveCurrentTrip() {
-            if(!currentUser || !tripId) return;
-            
-            const stateToSave = {
-                routeOptions: routeOptions,
-                weatherData: weatherData,
-                aiItineraryData: aiItineraryData,
-                destInput: document.getElementById('destinationInput').value
-            };
-            
-            await fetch('/api/trips/save', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    user_id: parseInt(currentUser.token),
-                    trip_id: tripId,
-                    destination: stateToSave.destInput,
-                    data_json: JSON.stringify(stateToSave)
-                })
-            });
-            alert("Trip saved!");
-        }
-
-        // WebSockets Logic
-        let ws;
-        const urlParams = new URLSearchParams(window.location.search);
-        let tripId = urlParams.get('trip');
-        
-        if(!tripId) {
-            tripId = Math.random().toString(36).substring(2, 10);
-            window.history.replaceState({}, '', `?trip=${tripId}`);
-        }
-        
-        // Notify others of room sharing
-        console.log("Multiplayer Room ID: ", tripId);
-        
-        function initWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${window.location.host}/ws/${tripId}`);
-            
-            ws.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                if(data.type === 'calculate') {
-                    // Prevent infinite loops if we are the sender
-                    if(data.sender === currentUser?.username) return;
-                    
-                    // Someone else calculated a route, update our UI!
-                    routeOptions = data.state.routeOptions;
-                    weatherData = data.state.weatherData;
-                    aiItineraryData = data.state.aiItineraryData;
-                    document.getElementById('destinationInput').value = data.state.destInput;
-                    
-                    // Re-render UI
-                    renderRouteCards();
-                    if(weatherData) document.getElementById('weather-info').innerHTML = `<strong>${weatherData.temperature}°C</strong>, ${weatherData.condition}`;
-                    if(aiItineraryData) renderItinerary(aiItineraryData);
-                    
-                    // If map is active, we'd need to re-draw. For simplicity, we just trigger selectRoute on the Fastest one
-                    if(Object.keys(routeOptions).length > 0) {
-                        selectRoute(Object.keys(routeOptions)[0]);
-                    }
-                } else if(data.type === 'chat') {
-                    const messages = document.getElementById('chat-messages');
-                    messages.innerHTML += `<div style="background:var(--surface); padding:0.8rem; border-radius:8px; align-self:flex-start; max-width:85%; border:1px solid var(--border); line-height: 1.5; font-size: 0.9em;"><strong>${data.sender}:</strong> ${data.text}</div>`;
-                    messages.scrollTop = messages.scrollHeight;
-                }
-            };
-        }
-        
-        window.addEventListener('load', initWebSocket);
-
-        // Intercept Calculate Route to Broadcast State
-        const originalCalculateRoute = calculateRoute;
-        calculateRoute = async function() {
-            await originalCalculateRoute();
-            
-            // Broadcast new state to room
-            if(ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                    type: 'calculate',
-                    sender: currentUser?.username || 'Guest',
-                    state: {
-                        routeOptions: routeOptions,
-                        weatherData: weatherData,
-                        aiItineraryData: aiItineraryData,
-                        destInput: document.getElementById('destinationInput').value
-                    }
-                }));
-            }
-        };
-
-
-    </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --bg-color: #f8fafc;
@@ -421,8 +153,6 @@
             <span style="font-weight: 800; font-size: 1.4rem; background: -webkit-linear-gradient(45deg, #3b82f6, #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">WS</span>
         </h1>
         <div style="display:flex; gap: 10px; align-items:center;">
-            <button id="authBtn" onclick="toggleAuthModal()" style="background:var(--primary); color:white; border:none; padding:8px 16px; border-radius:6px; font-weight:600; cursor:pointer;">Login</button>
-            <button id="saveTripBtn" onclick="saveCurrentTrip()" style="display:none; background:var(--success); color:white; border:none; padding:8px 16px; border-radius:6px; font-weight:600; cursor:pointer;">Save Trip</button>
             <button class="settings-btn" onclick="document.getElementById('settingsModal').classList.add('active')">Settings</button>
         </div>
     </header>
@@ -473,22 +203,6 @@
         <div class="map-pane" id="mapPane">
             <button class="map-toggle-btn" onclick="toggleMap()">Toggle Map</button>
             <div id="map"></div>
-        </div>
-    </div>
-
-    
-    <!-- Auth Modal -->
-    <div id="authModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
-        <div style="background:var(--surface); padding:2rem; border-radius:12px; width:90%; max-width:400px; border:1px solid var(--border);">
-            <h2 style="margin-top:0; color:var(--text);">Login / Signup</h2>
-            <input type="text" id="usernameInput" placeholder="Username" style="width:100%; padding:0.8rem; margin-bottom:1rem; border:1px solid var(--border); border-radius:6px; background:var(--bg-color); color:var(--text);">
-            <input type="password" id="passwordInput" placeholder="Password" style="width:100%; padding:0.8rem; margin-bottom:1rem; border:1px solid var(--border); border-radius:6px; background:var(--bg-color); color:var(--text);">
-            <div style="display:flex; gap:10px;">
-                <button onclick="handleAuth('login')" style="flex:1; background:var(--primary); color:white; border:none; padding:10px; border-radius:6px; cursor:pointer; font-weight:bold;">Login</button>
-                <button onclick="handleAuth('signup')" style="flex:1; background:transparent; color:var(--text); border:1px solid var(--border); padding:10px; border-radius:6px; cursor:pointer; font-weight:bold;">Sign Up</button>
-            </div>
-            <p id="authError" style="color:var(--danger); margin-top:10px; display:none;"></p>
-            <button onclick="toggleAuthModal()" style="margin-top:15px; width:100%; background:transparent; color:var(--text); border:none; cursor:pointer; text-decoration:underline;">Close</button>
         </div>
     </div>
 
@@ -908,7 +622,7 @@
                 if(ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({
                         type: 'chat',
-                        sender: currentUser?.username || 'Guest',
+                        sender: 'Guest',
                         text: msg
                     }));
                 }
@@ -962,71 +676,6 @@
                 });
             });
         }
-    
-        // Auth Logic
-        let currentUser = null;
-        
-        function toggleAuthModal() {
-            const modal = document.getElementById('authModal');
-            modal.style.display = modal.style.display === 'flex' ? 'none' : 'flex';
-        }
-        
-        async function handleAuth(action) {
-            const user = document.getElementById('usernameInput').value;
-            const pass = document.getElementById('passwordInput').value;
-            if(!user || !pass) return;
-            
-            try {
-                const res = await fetch(`/api/${action}`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({username: user, password: pass})
-                });
-                const data = await res.json();
-                if(res.ok) {
-                    if(action === 'login') {
-                        currentUser = data;
-                        document.getElementById('authBtn').innerText = `Hi, ${user}`;
-                        document.getElementById('saveTripBtn').style.display = 'block';
-                        toggleAuthModal();
-                    } else {
-                        document.getElementById('authError').style.display = 'block';
-                        document.getElementById('authError').style.color = 'var(--success)';
-                        document.getElementById('authError').innerText = 'Signup successful! Please login.';
-                    }
-                } else {
-                    document.getElementById('authError').style.display = 'block';
-                    document.getElementById('authError').style.color = 'var(--danger)';
-                    document.getElementById('authError').innerText = data.detail || 'Error';
-                }
-            } catch(e) {
-                console.error(e);
-            }
-        }
-
-        async function saveCurrentTrip() {
-            if(!currentUser || !tripId) return;
-            
-            const stateToSave = {
-                routeOptions: routeOptions,
-                weatherData: weatherData,
-                aiItineraryData: aiItineraryData,
-                destInput: document.getElementById('destinationInput').value
-            };
-            
-            await fetch('/api/trips/save', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    user_id: parseInt(currentUser.token),
-                    trip_id: tripId,
-                    destination: stateToSave.destInput,
-                    data_json: JSON.stringify(stateToSave)
-                })
-            });
-            alert("Trip saved!");
-        }
-
         // WebSockets Logic
         let ws;
         const urlParams = new URLSearchParams(window.location.search);
@@ -1048,7 +697,7 @@
                 const data = JSON.parse(event.data);
                 if(data.type === 'calculate') {
                     // Prevent infinite loops if we are the sender
-                    if(data.sender === currentUser?.username) return;
+                    if(data.sender === 'Guest') return;
                     
                     // Someone else calculated a route, update our UI!
                     routeOptions = data.state.routeOptions;
@@ -1084,7 +733,7 @@
             if(ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'calculate',
-                    sender: currentUser?.username || 'Guest',
+                    sender: 'Guest',
                     state: {
                         routeOptions: routeOptions,
                         weatherData: weatherData,

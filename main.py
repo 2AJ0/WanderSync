@@ -4,27 +4,15 @@ import httpx
 import hashlib
 import asyncio
 from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 import math
 import uuid
-import database
-import models
-from sqlalchemy.orm import Session
 
 load_dotenv()
-
-models.Base.metadata.create_all(bind=database.engine)
-
-def get_db():
-    db = database.SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 GOOGLE_ROUTES_API_KEY = os.getenv("GOOGLE_ROUTES_API_KEY", "")
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY", "")
@@ -847,56 +835,6 @@ async def websocket_endpoint(websocket: WebSocket, trip_id: str):
             await manager.broadcast(data, trip_id)
     except WebSocketDisconnect:
         manager.disconnect(websocket, trip_id)
-
-class UserAuth(BaseModel):
-    username: str
-    password: str
-
-@app.post("/api/signup")
-def signup(auth: UserAuth, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.username == auth.username).first()
-    if user:
-        raise HTTPException(status_code=400, detail="Username already registered")
-    
-    # In a real app, hash this password!
-    new_user = models.User(username=auth.username, hashed_password=auth.password)
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    return {"message": "User created successfully"}
-
-@app.post("/api/login")
-def login(auth: UserAuth, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.username == auth.username).first()
-    if not user or user.hashed_password != auth.password:
-        raise HTTPException(status_code=400, detail="Incorrect username or password")
-    # In a real app, return a JWT token!
-    return {"token": str(user.id), "username": user.username}
-
-class TripSave(BaseModel):
-    user_id: int
-    trip_id: str
-    destination: str
-    data_json: str
-
-@app.post("/api/trips/save")
-def save_trip(trip: TripSave, db: Session = Depends(get_db)):
-    db_trip = db.query(models.Trip).filter(models.Trip.trip_id == trip.trip_id).first()
-    if db_trip:
-        db_trip.data_json = trip.data_json
-        db_trip.destination = trip.destination
-    else:
-        new_trip = models.Trip(**trip.dict())
-        db.add(new_trip)
-    db.commit()
-    return {"message": "Trip saved successfully"}
-
-@app.get("/api/trips/{trip_id}")
-def load_trip(trip_id: str, db: Session = Depends(get_db)):
-    db_trip = db.query(models.Trip).filter(models.Trip.trip_id == trip_id).first()
-    if not db_trip:
-        raise HTTPException(status_code=404, detail="Trip not found")
-    return {"data_json": db_trip.data_json}
 
 app.mount("/", StaticFiles(directory="."), name="static")
 
